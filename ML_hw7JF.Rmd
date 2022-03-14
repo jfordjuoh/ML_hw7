@@ -1,0 +1,153 @@
+---
+title: "MLHW7_JF"
+date: March 13, 2022
+output: word_document
+editor_options:
+  chunk_output_type: console
+---
+
+```{r libraries, include=FALSE}
+library(tidyverse)
+library(randomForest)
+library(gbm)
+library(dplyr)
+library(readxl)
+library(knitr)
+library(Amelia)
+library(e1071)
+library(rpart)
+library(caret)
+library(rpart.plot)
+library(pROC)
+```
+
+# Our main focus is to predict readmission for myocardial infarction.
+
+# Data Prep: Stripping the ID variable, checking for missing data, looking at the frequency of the outcome variable (readmission) to check for balance, and partitioning the data into training and testing using a 70/30 split. 
+```{r data_prep}
+mi = read.csv("/Users/judyfordjuoh/Desktop/Machine Learning/mi.data.csv") %>%
+  janitor::clean_names() %>%
+  mutate(readmission = recode(readmission,
+                            "0" = "No",
+                            "1" = "Yes")) 
+
+mi$readmission <- factor(mi$readmission, levels = c("No", "Yes"))
+
+#Stripping off ID Variable
+mi <- mi[,2:16]
+
+#Check distributions, missing data etc, omitting the NAs
+summary(mi)
+missmap(mi, main = "Missing values vs observed")
+#Since there is no missing data we won't do na.omit(mi)
+
+summary(mi$readmission) #Notice that the data is unbalanced so we will have to upsize or downsize. For simplicity sake, I will downsize.
+
+#tidyverse way to create data partition
+train_indices <- createDataPartition(y = mi$readmission,p = 0.7,list = FALSE)
+train_data <- mi[train_indices, ]
+test_data <- mi[-train_indices, ]
+```
+
+##REGULARIZED REGRESSION: ELASTIC NET
+```{r elastic net} 
+#REGULARIZED REGRESSION: ELASTIC NET
+
+set.seed(150)
+
+#Creating 10-fold cross-validation and using down-sampling because of imbalance in data
+en.model <- train(
+  readmission ~., data = train_data, method = "glmnet",
+  trControl = trainControl("cv", number = 10, sampling = "down"), preProc = c("center", "scale"), tuneLength = 10)
+
+#Print the values of alpha and lambda that gave best prediction
+en.model$bestTune %>% knitr::kable() # 0.3(alpha)| 0.029915(lambda)| 
+
+#Print all of the options examined. This is a logistic regression = we are using the Accuracy. 
+en.model$results %>% knitr::kable()
+
+# Model coefficients
+coef(en.model$finalModel, en.model$bestTune$lambda) 
+
+#Confusion Matrix
+confusionMatrix(en.model) #0.5869|(accuracy) 
+```
+The accuracy of the elastic net model was 59%. 
+
+# ENSEMBLE: BAGGING
+```{r, bagging using caret calling on randomforest package}
+set.seed(150)
+
+#Set our value for mtry hyperparameter (the number of features eligible for selection at each node)
+#Remember, in bagging, all predictor features are eligible for selection at each node
+mtry.val1 <- expand.grid(.mtry = ncol(train_data) - 1)
+
+trControl_bag = trainControl("cv", number = 10, sampling = "down")
+
+bag_readmission <- train(readmission ~., data = train_data, method = "rf", metric = "Accuracy", trControl = trControl_bag, tuneGrid = mtry.val1, ntree = 100)
+
+# accuracy results was a little bit better than the classification tree accuracy we ran before
+
+bag_readmission$results #mtry: 14, Accuracy: 0.522
+varImp(bag_readmission) #wbc = 100, age = 81.43, esr = 75.29, sodium 66.30
+plot(varImp(bag_readmission))
+confusionMatrix(bag_readmission) #Accuracy: 0.5223
+
+```
+The accuracy of the bagging model was 52%. The top three most important variables were white blood cell count (100) age at initial MI (81.43) and erythrocyte sedimentation rate (75.29). The least important variables were pulmonary adema (1.55), presence of arrythmia(0.13), and obesity (0.00). 
+
+# ENSEMBLE: RANDOM FOREST
+```{r}
+set.seed(150)
+
+#Trying three different values of mtry (square root, half)
+#Set our value for mtry hyperparameter (the number of features eligible for selection at each node)
+# since we are not specifying our cross validation, the default is a bootstrap. R is bootstrapping 25 times.
+
+mtry.vals <- c(ncol(train_data) - 1, sqrt(ncol(train_data) - 1), 0.5*ncol(train_data) - 1)
+
+mtry.grid <- expand.grid(.mtry = mtry.vals)
+
+trControl_rf = trainControl("cv", number = 10, sampling = "down")
+
+rf_readmission <- train(readmission ~., data = train_data, method = "rf", metric = "Accuracy", trControl = trControl_rf, tuneGrid = mtry.grid, ntree = 100)
+
+confusionMatrix(rf_readmission) #Accuracy (average) : 0.5516
+rf_readmission$results
+rf_readmission$bestTune #mtry = 6.5
+rf_readmission$finalModel
+
+varImp(rf_readmission) #age =100, wbc = 92.16, esr = 66.40, alt = 59.75
+plot(varImp(rf_readmission))
+
+varImpPlot(rf_readmission$finalModel)
+
+```
+The accuracy of the random forest model was 55%. The top three most important variables were age at initial MI (100), white blood cell count (92.2), and erythrocyte sedimentation rate (66.4). The least important variables were pulmonary adema (2), asthma (0.8), and obesity (0.00). 
+
+
+## Selecting an "optimal" model and calculate final evaluation metrics in the test set.
+The optimal model I selected was the elastic net model because the accuracy was the highest out of the three models I've constructed.
+
+```{r EN_optimal_model}
+#Checking out info about final model
+en.model$finalModel
+
+#Make predictions in testset
+en_pred_test <- predict(en.model, test_data)
+
+#Get evaluation metrics from test set
+confusionMatrix(en_pred_test, test_data$readmission, positive = "Yes") #Accuracy 0.5933 #Sensitivity:0.59574 #Specificity:0.59307
+
+#Create ROC Curve for Analysis
+pred.prob <- predict(en.model, test_data, type = "prob")
+
+#Another potential evaluation: Area under the Receiver Operating Curve (AUROC)
+#The ROC curve shows the trade-off between sensitivity (or TPR) and specificity (1 – FPR). Classifiers that give curves closer to the top-left corner indicate a better performance. The closer the curve comes to the 45-degree diagonal of the ROC space, the less accurate the test.
+analysis <- roc(response = test_data$readmission, predictor = pred.prob[,2])
+plot(1 - analysis$specificities,analysis$sensitivities,type = "l",
+ylab = "Sensitivity",xlab = "1-Specificity",col = "black",lwd = 2,
+main = "ROC Curve for Readmission Classification")
+abline(a = 0,b = 1)
+```
+The accuracy of the elastic net model on the test data was 59.33% with a sensitivity of 0.59574 and a specificity of 0.59307.
