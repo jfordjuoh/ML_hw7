@@ -49,16 +49,16 @@ train_data <- mi[train_indices, ]
 test_data <- mi[-train_indices, ]
 ```
 
-##REGULARIZED REGRESSION: ELASTIC NET
+# REGULARIZED REGRESSION: ELASTIC NET
 ```{r elastic net} 
 #REGULARIZED REGRESSION: ELASTIC NET
 
 set.seed(150)
 
-#Creating 10-fold cross-validation and using down-sampling because of imbalance in data
+#Creating 10-fold cross-validation and using up-sampling because of imbalance in data
 en.model <- train(
   readmission ~., data = train_data, method = "glmnet",
-  trControl = trainControl("cv", number = 10, sampling = "down"), preProc = c("center", "scale"), tuneLength = 10)
+  trControl = trainControl("cv", number = 10, sampling = "up"), preProc = c("center", "scale"), tuneLength = 10)
 
 #Print the values of alpha and lambda that gave best prediction
 en.model$bestTune %>% knitr::kable() # 0.3(alpha)| 0.029915(lambda)| 
@@ -70,9 +70,9 @@ en.model$results %>% knitr::kable()
 coef(en.model$finalModel, en.model$bestTune$lambda) 
 
 #Confusion Matrix
-confusionMatrix(en.model) #0.5869|(accuracy) 
+confusionMatrix(en.model) #0. |(accuracy) 
 ```
-The accuracy of the elastic net model was 59%. 
+The accuracy of the elastic net model was 62%.
 
 # ENSEMBLE: BAGGING
 ```{r, bagging using caret calling on randomforest package}
@@ -82,19 +82,19 @@ set.seed(150)
 #Remember, in bagging, all predictor features are eligible for selection at each node
 mtry.val1 <- expand.grid(.mtry = ncol(train_data) - 1)
 
-trControl_bag = trainControl("cv", number = 10, sampling = "down")
+trControl_bag = trainControl("cv", number = 10, sampling = "up")
 
 bag_readmission <- train(readmission ~., data = train_data, method = "rf", metric = "Accuracy", trControl = trControl_bag, tuneGrid = mtry.val1, ntree = 100)
 
 # accuracy results was a little bit better than the classification tree accuracy we ran before
 
-bag_readmission$results #mtry: 14, Accuracy: 0.522
-varImp(bag_readmission) #wbc = 100, age = 81.43, esr = 75.29, sodium 66.30
+bag_readmission$results #mtry: 14, Accuracy: 
+varImp(bag_readmission) #wbc , age , esr , sodium 
 plot(varImp(bag_readmission))
-confusionMatrix(bag_readmission) #Accuracy: 0.5223
+confusionMatrix(bag_readmission) #Accuracy: 
 
 ```
-The accuracy of the bagging model was 52%. The top three most important variables were white blood cell count (100) age at initial MI (81.43) and erythrocyte sedimentation rate (75.29). The least important variables were pulmonary adema (1.55), presence of arrythmia(0.13), and obesity (0.00). 
+The accuracy of the bagging model was 88.25%. The top three most important variables were white blood cell count (100) age at initial MI (77.60) and liver enzymes (59.14). The least important variables were asthma(0.7179), presence of arrythmia(0.00), and obesity (3.48).
 
 # ENSEMBLE: RANDOM FOREST
 ```{r}
@@ -108,39 +108,40 @@ mtry.vals <- c(ncol(train_data) - 1, sqrt(ncol(train_data) - 1), 0.5*ncol(train_
 
 mtry.grid <- expand.grid(.mtry = mtry.vals)
 
-trControl_rf = trainControl("cv", number = 10, sampling = "down")
+trControl_rf = trainControl("cv", number = 10, sampling = "up")
 
 rf_readmission <- train(readmission ~., data = train_data, method = "rf", metric = "Accuracy", trControl = trControl_rf, tuneGrid = mtry.grid, ntree = 100)
 
-confusionMatrix(rf_readmission) #Accuracy (average) : 0.5516
+confusionMatrix(rf_readmission) #Accuracy (average) : 
 rf_readmission$results
 rf_readmission$bestTune #mtry = 6.5
 rf_readmission$finalModel
 
-varImp(rf_readmission) #age =100, wbc = 92.16, esr = 66.40, alt = 59.75
+varImp(rf_readmission) #age, wbc , esr 
 plot(varImp(rf_readmission))
 
 varImpPlot(rf_readmission$finalModel)
 
 ```
-The accuracy of the random forest model was 55%. The top three most important variables were age at initial MI (100), white blood cell count (92.2), and erythrocyte sedimentation rate (66.4). The least important variables were pulmonary adema (2), asthma (0.8), and obesity (0.00). 
-
+The accuracy of the random forest model was 89.5%. The top three most important variables were age at initial MI (90.49), white blood cell count (100), and erythrocyte sedimentation rate (71.8). The least important variables were presence of arrythmia (0.00), asthma (1.44), and obesity (3.98).
 
 ## Selecting an "optimal" model and calculate final evaluation metrics in the test set.
-The optimal model I selected was the elastic net model because the accuracy was the highest out of the three models I've constructed.
+The optimal model I selected was the random forest model because the accuracy was the highest out of the three models I've constructed.
 
-```{r EN_optimal_model}
+```{r EN_optimal_model, results='hide'}
 #Checking out info about final model
-en.model$finalModel
+rf_readmission$finalModel
+```
 
+```{r EN_optimal_model continued}
 #Make predictions in testset
-en_pred_test <- predict(en.model, test_data)
+rf_pred_test <- predict(rf_readmission, test_data)
 
 #Get evaluation metrics from test set
-confusionMatrix(en_pred_test, test_data$readmission, positive = "Yes") #Accuracy 0.5933 #Sensitivity:0.59574 #Specificity:0.59307
+confusionMatrix(rf_pred_test, test_data$readmission, positive = "Yes") #Accuracy   #Sensitivity: #Specificity:
 
 #Create ROC Curve for Analysis
-pred.prob <- predict(en.model, test_data, type = "prob")
+pred.prob <- predict(rf_readmission, test_data, type = "prob")
 
 #Another potential evaluation: Area under the Receiver Operating Curve (AUROC)
 #The ROC curve shows the trade-off between sensitivity (or TPR) and specificity (1 – FPR). Classifiers that give curves closer to the top-left corner indicate a better performance. The closer the curve comes to the 45-degree diagonal of the ROC space, the less accurate the test.
@@ -150,4 +151,4 @@ ylab = "Sensitivity",xlab = "1-Specificity",col = "black",lwd = 2,
 main = "ROC Curve for Readmission Classification")
 abline(a = 0,b = 1)
 ```
-The accuracy of the elastic net model on the test data was 59.33% with a sensitivity of 0.59574 and a specificity of 0.59307.
+The accuracy of the random forest model on the test data was 89.59 % with a sensitivity of 0.00 and a specificity of 0.98701.
